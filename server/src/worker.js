@@ -80,6 +80,7 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS users_bal ON users(hidden, balance DESC)`),
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS users_lvl ON users(hidden, level DESC, xp DESC)`),
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS users_un ON users(username)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending (chat_id INTEGER PRIMARY KEY, cmd TEXT, target TEXT, ts INTEGER)`),
   ]);
 }
 function mergeState(o) {
@@ -320,11 +321,40 @@ async function onUpdate(env, upd) {
     return send(t, { reply_markup: playKb(env) });
   }
   const adminCmds = { "/give": "crystals", "/level": "levels", "/hide": "hide", "/unhide": "unhide", "/info": "info" };
+  const needsAmount = c => c === "/give" || c === "/level";
+  const admin = isAdmin(env, from.id);
+
+  // пошаговый режим: /give → @ник → число (ответы запоминаются между сообщениями)
+  let pending = admin ? await env.DB.prepare("SELECT cmd, target FROM pending WHERE chat_id=? AND ts>?").bind(chat, Date.now() - 10 * 60e3).first() : null;
+  let useCmd = cmd, target, amount;
+  const restNum = w => w.length ? w.join("") : undefined; // "500 000" -> "500000"
   if (adminCmds[cmd]) {
-    if (!isAdmin(env, from.id)) return send("Эта команда только для администраторов.");
-    const [target, amount] = args;
-    if (!target) return send("Укажи игрока: @ник или ID");
+    target = args[0]; amount = restNum(args.slice(1));
+  } else if (pending && !text.startsWith("/")) {
+    useCmd = pending.cmd;
+    const words = text.split(/\s+/);
+    if (pending.target) { target = pending.target; amount = restNum(words); }
+    else { target = words[0]; amount = restNum(words.slice(1)); }
+  } else {
+    if (pending && cmd === "/cancel") { await env.DB.prepare("DELETE FROM pending WHERE chat_id=?").bind(chat).run(); return send("Отменено."); }
+    return;
+  }
+  if (adminCmds[useCmd]) {
+    if (!admin) return send("Эта команда только для администраторов.");
+    const ask = async (tgt, question) => {
+      await env.DB.prepare("INSERT OR REPLACE INTO pending (chat_id, cmd, target, ts) VALUES (?,?,?,?)").bind(chat, useCmd, tgt || null, Date.now()).run();
+      return send(question + "\n\n<i>/cancel — отменить</i>");
+    };
+    if (!target) return ask(null, "Укажи игрока: @ник или ID");
+    if (needsAmount(useCmd) && (amount === undefined || amount === "")) {
+      return ask(target, useCmd === "/give" ? `Сколько кристаллов выдать ${esc(target)}? (минус — забрать)` : `Сколько уровней добавить ${esc(target)}?`);
+    }
+    if (needsAmount(useCmd) && !Number.isFinite(+amount.replace(/[\s_]/g, ""))) return ask(target, "Нужно число, например 500000. Попробуй ещё раз:");
+    if (amount !== undefined) amount = amount.replace(/[\s_]/g, "");
+    await env.DB.prepare("DELETE FROM pending WHERE chat_id=?").bind(chat).run();
+    const cmd2 = useCmd;
     try {
+      const cmd = cmd2;
       if (cmd === "/info") {
         const { user: u } = await adminFind(env, from.id, target);
         return send(`👤 <b>${esc(u.name)}</b>${u.username ? ` @${esc(u.username)}` : ""}\nID: <code>${u.id}</code>\n💎 ${u.balance.toLocaleString("ru-RU")} · ур. ${u.level}${u.hidden ? "\n🙈 скрыт из таблиц" : ""}${u.admin ? "\n🛡 admin" : ""}`);
