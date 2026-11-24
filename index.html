@@ -160,6 +160,36 @@ h2{font-size:20px;margin:4px 0 4px}
 .modal p{color:var(--muted);margin:0 0 16px}
 .rules p{text-align:left;color:var(--text);font-size:13px;margin:0 0 8px}
 
+/* leaderboard */
+.lb{display:flex;flex-direction:column;gap:6px}
+.lbr{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
+.lbr.me{border-color:var(--teal2);box-shadow:0 0 12px rgba(44,201,220,.2)}
+.lbr .pl{width:28px;text-align:center;font-weight:800;color:var(--muted);flex:none}
+.lbr .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.lbr .vl{font-weight:800;white-space:nowrap}
+.lbsep{text-align:center;color:var(--muted);line-height:1}
+.badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:#1b1203;background:linear-gradient(180deg,#ffd76a,#f59e0b);border-radius:6px;padding:1px 5px;margin-left:5px;vertical-align:2px}
+.muted{color:var(--muted);text-align:center;padding:20px 0}
+/* admin */
+.adm{display:flex;flex-direction:column;gap:8px;background:var(--panel);border:1px solid #6b4e16;border-radius:16px;padding:12px}
+.admrow{display:flex;gap:8px}
+.admrow input{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:10px 12px;outline:none}
+.admrow input:focus{border-color:var(--teal2)}
+.sbtn{border:none;border-radius:10px;padding:10px 12px;font-weight:700;color:#fff;background:var(--panel2);cursor:pointer;white-space:nowrap}
+.sbtn.green{background:linear-gradient(180deg,#3fe0a6,#16a374)}
+.sbtn:disabled{opacity:.5}
+.admuser{font-size:13px;color:var(--muted);min-height:18px;padding:0 2px}
+.admuser b{color:var(--text)}
+/* gate (loading / not in Telegram) */
+.gate{position:fixed;inset:0;z-index:30;background:var(--bg);display:grid;place-items:center;padding:16px}
+.gate.off{display:none}
+.gate .box{text-align:center;max-width:320px}
+.gate .big{font-size:56px;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.12)}}
+.gate p{color:var(--muted)}
+.busy .tile{pointer-events:none}
+.nav button{font-size:10.5px}
+
 /* ---- small phones (must stay last) ---- */
 @media (max-width:360px){ .board{gap:6px} .board-wrap{padding:8px;border-radius:18px} .tile{border-radius:10px}
   .maxwin .star{display:none} .chip{padding:6px 9px} .iconbtn{width:34px;height:34px} .xpbar{width:70px} }
@@ -271,433 +301,43 @@ h2{font-size:20px;margin:4px 0 4px}
     <div class="stats" id="stats"></div>
     <h2 style="font-size:16px">Последние игры</h2>
     <div class="hist" id="hist"></div>
-    <button class="link" id="resetBtn">Сбросить прогресс</button>
+
+    <div id="adminPanel" style="display:none">
+      <h2 style="margin-top:22px">🛡 Админ-панель</h2>
+      <p class="sub">Игрок по @нику или Telegram ID (он должен хотя бы раз открыть игру)</p>
+      <div class="adm">
+        <div class="admrow"><input id="admTarget" placeholder="@ник или ID" autocomplete="off"><button class="sbtn" id="admFind">Найти</button></div>
+        <div id="admUser" class="admuser"></div>
+        <div class="admrow"><input id="admCrystals" inputmode="numeric" placeholder="Кристаллы (−500 чтобы забрать)"><button class="sbtn green" id="admGive">Выдать 💎</button></div>
+        <div class="admrow"><input id="admLevels" inputmode="numeric" placeholder="Уровни (+/−)"><button class="sbtn green" id="admLevel">Выдать ур.</button></div>
+        <div class="admrow"><button class="sbtn" id="admHide" style="flex:1">🙈 Скрыть из топа</button><button class="sbtn" id="admUnhide" style="flex:1">👁 Вернуть в топ</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LEADERBOARD -->
+  <section class="view" id="v-top">
+    <h2>Таблица лидеров</h2>
+    <p class="sub">Лучшие шахтёры Crystal Mines</p>
+    <div class="tabs2">
+      <button class="on" data-lb="balance">💎 Кристаллы</button>
+      <button data-lb="level">⭐ Уровень</button>
+    </div>
+    <div class="lb" id="lbList"><div class="muted">Загрузка…</div></div>
   </section>
 </div>
 
 <nav class="nav"><div class="in">
   <button class="on" data-v="game"><span class="e">💎</span>Игра</button>
   <button data-v="missions"><span class="e">🎯</span>Миссии<i class="dot" id="dotM"></i></button>
+  <button data-v="top"><span class="e">🏆</span>Топ</button>
   <button data-v="bonus"><span class="e">🎁</span>Бонусы<i class="dot" id="dotB"></i></button>
   <button data-v="profile"><span class="e">👤</span>Профиль</button>
 </div></nav>
 
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
+<div class="gate" id="gate"><div class="box"><div class="big">💎</div><h3>Crystal Mines</h3><p id="gateMsg">Загрузка…</p><a class="bigbtn blue" id="gateBtn" style="display:none;text-decoration:none" href="https://t.me/miner312678312_bot">Открыть в Telegram</a></div></div>
 
-<script>
-(() => {
-"use strict";
-const tg = window.Telegram && window.Telegram.WebApp;
-const hasTg = !!(tg && tg.initData !== undefined && tg.platform && tg.platform !== "unknown");
-if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor && tg.setHeaderColor("#0b1020"); tg.setBackgroundColor && tg.setBackgroundColor("#0b1020");
-  if (tg.isVersionAtLeast && tg.isVersionAtLeast("7.7") && tg.disableVerticalSwipes) tg.disableVerticalSwipes();
-  if (tg.isVersionAtLeast && tg.isVersionAtLeast("7.10") && tg.setBottomBarColor) tg.setBottomBarColor("#0d1326");
-} catch(e){} }
-// real visible height (Telegram viewport or window) -> --vh, so the board fits any phone
-function fitVh(){
-  const h = (tg && tg.viewportStableHeight) || window.innerHeight;
-  document.documentElement.style.setProperty("--vh", h + "px");
-  const top = tg && tg.contentSafeAreaInset ? (tg.contentSafeAreaInset.top||0) + ((tg.safeAreaInset&&tg.safeAreaInset.top)||0) : 0;
-  document.documentElement.style.setProperty("--tg-top", (tg && tg.isFullscreen ? top : 0) + "px");
-}
-fitVh(); window.addEventListener("resize", fitVh);
-if (tg && tg.onEvent) { ["viewportChanged","safeAreaChanged","contentSafeAreaChanged","fullscreenChanged"].forEach(ev => { try { tg.onEvent(ev, fitVh); } catch(e){} }); }
-document.addEventListener("gesturestart", e => e.preventDefault());
-document.addEventListener("dblclick", e => e.preventDefault(), {passive:false});
-
-const $ = id => document.getElementById(id);
-const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 100000;
-
-const GEM = `<svg viewBox="0 0 64 64"><defs><linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b8f7ff"/><stop offset="1" stop-color="#1fb6d6"/></linearGradient></defs><polygon points="12,24 22,10 42,10 52,24 32,56" fill="url(#gg)"/><polygon points="12,24 52,24 32,56" fill="#22a9cc"/><polygon points="22,10 32,24 42,10" fill="#dffbff"/><polygon points="12,24 22,10 32,24" fill="#8eeeff"/><polygon points="32,24 42,10 52,24" fill="#5fd8f0"/><polygon points="22,24 32,56 12,24" fill="#3ec4e4" opacity=".7"/></svg>`;
-const MINE = `<svg viewBox="0 0 64 64"><g stroke="#2a0f1e" stroke-width="5" stroke-linecap="round"><line x1="32" y1="6" x2="32" y2="58"/><line x1="6" y1="32" x2="58" y2="32"/><line x1="14" y1="14" x2="50" y2="50"/><line x1="50" y1="14" x2="14" y2="50"/></g><circle cx="32" cy="32" r="17" fill="#ff4d6d"/><circle cx="32" cy="32" r="17" fill="none" stroke="#2a0f1e" stroke-width="3"/><circle cx="26" cy="26" r="5" fill="#ffd0da"/></svg>`;
-$("gemIco").innerHTML = GEM;
-
-// ---------- helpers ----------
-const today = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`; };
-const fmt = n => Math.floor(n).toLocaleString("ru-RU");
-const comb = (n,k) => { let r = 1; for (let i=0;i<k;i++) r = r*(n-i)/(i+1); return r; };
-const multFor = (traps, opened) => opened === 0 ? 1 : Math.floor(EDGE * comb(SIZE,opened)/comb(SIZE-traps,opened) * 100) / 100;
-const haptic = (t) => { try { if (!tg || !tg.HapticFeedback) return;
-  if (t==="ok"||t==="err"||t==="warn") tg.HapticFeedback.notificationOccurred({ok:"success",err:"error",warn:"warning"}[t]);
-  else tg.HapticFeedback.impactOccurred(t||"light"); } catch(e){} };
-
-// ---------- sound ----------
-let actx = null;
-function beep(freq, dur=0.08, type="sine", vol=0.08, slide=0){
-  if (!S.sound) return;
-  try {
-    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
-    const o = actx.createOscillator(), g = actx.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide), actx.currentTime+dur);
-    g.gain.value = vol; g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+dur);
-    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime+dur);
-  } catch(e){}
-}
-const sfx = {
-  gem: (n) => beep(520 + n*40, .12, "triangle", .07),
-  boom: () => { beep(160,.45,"sawtooth",.12,-120); },
-  cash: () => { beep(660,.1,"triangle"); setTimeout(()=>beep(880,.12,"triangle"),90); setTimeout(()=>beep(1180,.18,"triangle"),190); },
-  click: () => beep(300,.04,"square",.03),
-};
-
-// ---------- state ----------
-const DEFAULT = () => ({
-  v:1, balance:1000, xp:0, level:1, sound:true, traps:3, bet:10,
-  stats:{games:0,wins:0,losses:0,gems:0,bestMult:0,bestWin:0,totalWon:0,totalBet:0},
-  daily:{date:"",p:{},c:{}},
-  ach:{},
-  bonus:{last:"",streak:0},
-  spinAt:0, refillAt:0,
-  hist:[]
-});
-let S = DEFAULT();
-const KEY = "crystal_mines_v1";
-
-function save(){
-  const data = JSON.stringify(S);
-  try { localStorage.setItem(KEY, data); } catch(e){}
-  try { if (hasTg && tg.CloudStorage && tg.isVersionAtLeast("6.9")) tg.CloudStorage.setItem(KEY, data.length < 4000 ? data : JSON.stringify({...S, hist:S.hist.slice(0,3)})); } catch(e){}
-}
-function merge(o){ const d = DEFAULT(); return {...d, ...o, stats:{...d.stats, ...(o.stats||{})}, daily:{...d.daily, ...(o.daily||{})}, bonus:{...d.bonus,...(o.bonus||{})}, ach:o.ach||{}, hist:o.hist||[]}; }
-function load(cb){
-  let local = null;
-  try { local = JSON.parse(localStorage.getItem(KEY)||"null"); } catch(e){}
-  if (hasTg && tg.CloudStorage && tg.isVersionAtLeast("6.9")) {
-    let done = false;
-    const fin = (v) => { if (done) return; done = true; cb(v); };
-    setTimeout(()=>fin(local), 1500);
-    try {
-      tg.CloudStorage.getItem(KEY, (err, val) => {
-        let cloud = null; try { cloud = val ? JSON.parse(val) : null; } catch(e){}
-        // prefer the save with more games played
-        if (cloud && (!local || (cloud.stats?.games||0) >= (local.stats?.games||0))) fin(cloud); else fin(local);
-      });
-    } catch(e){ fin(local); }
-  } else cb(local);
-}
-
-// ---------- missions ----------
-const DAILY = [
-  {id:"play",  ic:"🎮", t:"Сыграй 5 раундов",              goal:5,  r:150},
-  {id:"gems",  ic:"💎", t:"Открой 25 кристаллов",          goal:25, r:200},
-  {id:"cash2", ic:"📈", t:"Забери выигрыш с множителем ×2+", goal:1, r:250},
-  {id:"hard",  ic:"💀", t:"Выиграй раунд с 7+ ловушками",   goal:1,  r:300},
-  {id:"row5",  ic:"🔥", t:"Открой 5 кристаллов за раунд 3 раза", goal:3, r:200},
-  {id:"wins",  ic:"🏆", t:"Выиграй 3 раунда",               goal:3,  r:200},
-];
-const ACH = [
-  {id:"first", ic:"🥇", t:"Первая победа",       d:"Выиграй любой раунд",          goal:1,    r:100,  v:s=>s.stats.wins},
-  {id:"g100",  ic:"💎", t:"Шахтёр",              d:"Открой 100 кристаллов",        goal:100,  r:500,  v:s=>s.stats.gems},
-  {id:"g1000", ic:"⛏️", t:"Мастер шахты",        d:"Открой 1000 кристаллов",       goal:1000, r:3000, v:s=>s.stats.gems},
-  {id:"r50",   ic:"🎲", t:"Завсегдатай",         d:"Сыграй 50 раундов",            goal:50,   r:800,  v:s=>s.stats.games},
-  {id:"x5",    ic:"🚀", t:"Рисковый",            d:"Забери выигрыш с ×5",          goal:5,    r:700,  v:s=>s.stats.bestMult},
-  {id:"x25",   ic:"🌋", t:"Безумец",             d:"Забери выигрыш с ×25",         goal:25,   r:4000, v:s=>s.stats.bestMult},
-  {id:"lv5",   ic:"⭐", t:"Опытный",             d:"Достигни 5 уровня",            goal:5,    r:1000, v:s=>s.level},
-  {id:"lv10",  ic:"👑", t:"Легенда",             d:"Достигни 10 уровня",           goal:10,   r:5000, v:s=>s.level},
-  {id:"streak7",ic:"📅",t:"Верность",            d:"Забери награду 7 дней подряд", goal:7,    r:2000, v:s=>s.bonus.streak},
-];
-function checkDailyReset(){ if (S.daily.date !== today()) S.daily = {date:today(), p:{}, c:{}}; }
-function addProg(id, n=1){
-  checkDailyReset();
-  const m = DAILY.find(x=>x.id===id); if (!m) return;
-  const before = S.daily.p[id]||0;
-  S.daily.p[id] = Math.min(m.goal, before + n);
-  if (before < m.goal && S.daily.p[id] >= m.goal) toast(`🎯 Миссия выполнена: ${m.t}`);
-}
-function claimDaily(id){
-  const m = DAILY.find(x=>x.id===id);
-  if ((S.daily.p[id]||0) < m.goal || S.daily.c[id]) return;
-  S.daily.c[id] = true; addBal(m.r); addXp(20);
-  haptic("ok"); sfx.cash(); toast(`+${fmt(m.r)} 💎`); save(); renderAll();
-}
-function claimAch(id){
-  const a = ACH.find(x=>x.id===id);
-  if (a.v(S) < a.goal || S.ach[id]) return;
-  S.ach[id] = true; addBal(a.r); haptic("ok"); sfx.cash(); toast(`🏅 ${a.t}: +${fmt(a.r)} 💎`); save(); renderAll();
-}
-
-// ---------- economy ----------
-function addBal(n){ S.balance = Math.max(0, Math.round(S.balance + n)); bumpBal(); }
-function bumpBal(){ const el = $("bal"); el.parentElement.animate([{transform:"scale(1.12)"},{transform:"scale(1)"}],{duration:250}); }
-const xpNeed = lv => 100 + (lv-1)*60;
-function addXp(n){
-  S.xp += n;
-  while (S.xp >= xpNeed(S.level)) {
-    S.xp -= xpNeed(S.level); S.level++;
-    const r = 150 * S.level; addBal(r);
-    setTimeout(()=>modal(`<div class="big">⭐</div><h3>Уровень ${S.level}!</h3><p>Награда: ${fmt(r)} 💎</p><button class="bigbtn" onclick="closeModal()">Круто</button>`), 600);
-  }
-}
-
-// ---------- game ----------
-let G = null; // {mines:Set, open:Set, bet, traps, over}
-const board = $("board");
-function buildBoard(){
-  board.innerHTML = "";
-  for (let i=0;i<SIZE;i++){
-    const b = document.createElement("button"); b.className = "tile"; b.dataset.i = i;
-    b.addEventListener("click", () => onTile(i, b));
-    board.appendChild(b);
-  }
-}
-function resetTiles(){ [...board.children].forEach(t => { t.className = "tile"; t.innerHTML = ""; }); }
-
-function startGame(){
-  const bet = clampBet(+$("bet").value || 0);
-  if (bet > S.balance) { toast("Недостаточно кристаллов. Загляни в «Бонусы» 🎁"); haptic("err"); return; }
-  S.bet = bet; addBal(-bet); S.stats.totalBet += bet;
-  const mines = new Set();
-  const rnd = n => { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; };
-  while (mines.size < S.traps) mines.add(rnd(SIZE));
-  G = {mines, open:new Set(), bet, traps:S.traps, over:false};
-  resetTiles(); board.classList.remove("idle");
-  haptic("medium"); sfx.click(); save(); renderGame();
-}
-
-function onTile(i, el){
-  if (!G || G.over || G.open.has(i)) return;
-  if (G.mines.has(i)) {
-    el.className = "tile open boom"; el.innerHTML = MINE;
-    G.over = true; haptic("err"); sfx.boom();
-    board.parentElement.classList.add("shake"); setTimeout(()=>board.parentElement.classList.remove("shake"), 450);
-    revealAll(i);
-    finish(false, 0);
-    return;
-  }
-  G.open.add(i);
-  el.className = "tile open gem"; el.innerHTML = GEM;
-  haptic("light"); sfx.gem(G.open.size);
-  S.stats.gems++; addProg("gems");
-  if (G.open.size === 5) addProg("row5");
-  if (G.open.size === SIZE - G.traps) { cashOut(); return; }
-  renderGame();
-}
-
-function revealAll(hit){
-  [...board.children].forEach((t, i) => {
-    if (G.open.has(i) || i === hit) return;
-    t.className = "tile open ghost " + (G.mines.has(i) ? "boom" : "gem");
-    t.innerHTML = G.mines.has(i) ? MINE : GEM;
-  });
-}
-
-function cashOut(){
-  if (!G || G.over || G.open.size === 0) return;
-  G.over = true;
-  const m = multFor(G.traps, G.open.size), win = Math.floor(G.bet * m);
-  addBal(win); revealAll(-1); haptic("ok"); sfx.cash();
-  finish(true, win, m);
-}
-
-function finish(won, win, m=0){
-  const opened = G.open.size;
-  S.stats.games++; addProg("play");
-  if (won) {
-    S.stats.wins++; S.stats.totalWon += win; addProg("wins");
-    S.stats.bestMult = Math.max(S.stats.bestMult, m); S.stats.bestWin = Math.max(S.stats.bestWin, win);
-    if (m >= 2) addProg("cash2");
-    if (G.traps >= 7) addProg("hard");
-  } else S.stats.losses++;
-  addXp(5 + opened * 2 + (won ? Math.round(G.traps) : 0));
-  S.hist.unshift({w:won, b:G.bet, m, win, t:G.traps});
-  S.hist = S.hist.slice(0, 15);
-  save();
-  board.classList.add("idle");
-  renderAll();
-  if (won) setTimeout(()=>modal(`<div class="big">💎</div><h3>+${fmt(win)}</h3><p>Множитель ×${m.toFixed(2)} · ловушек: ${G.traps}</p><button class="bigbtn blue" onclick="closeModal()">Продолжить</button>`), 350);
-}
-
-// ---------- bet controls ----------
-function clampBet(v){ return Math.max(MIN_BET, Math.min(MAX_BET, Math.floor(v))); }
-function setBet(v){ S.bet = clampBet(v); $("bet").value = S.bet; renderGame(); save(); }
-$("betMinus").onclick = () => { sfx.click(); setBet(S.bet/2); };
-$("betPlus").onclick  = () => { sfx.click(); setBet(S.bet*2); };
-$("bet").addEventListener("change", e => setBet(+e.target.value||MIN_BET));
-$("bet").addEventListener("input", e => { e.target.value = e.target.value.replace(/\D/g,""); });
-$("quick").addEventListener("click", e => {
-  const q = e.target.dataset.q; if (!q) return; sfx.click();
-  if (q==="min") setBet(MIN_BET); if (q==="half") setBet(S.bet/2); if (q==="x2") setBet(S.bet*2); if (q==="max") setBet(Math.max(MIN_BET, S.balance));
-});
-const setTraps = v => { S.traps = Math.max(1, Math.min(24, v)); sfx.click(); haptic("light"); renderGame(); save(); };
-$("trapMinus").onclick = () => setTraps(S.traps-1);
-$("trapPlus").onclick  = () => setTraps(S.traps+1);
-$("playBtn").onclick = () => { if (G && !G.over) cashOut(); else startGame(); };
-
-// ---------- daily bonus & wheel ----------
-const DAY_REWARDS = [100,150,200,300,400,600,1000];
-function bonusState(){
-  const t = today();
-  const y = new Date(); y.setDate(y.getDate()-1);
-  const yest = `${y.getFullYear()}-${y.getMonth()+1}-${y.getDate()}`;
-  const claimedToday = S.bonus.last === t;
-  let streak = S.bonus.streak;
-  if (!claimedToday && S.bonus.last !== yest) streak = 0;
-  return {claimedToday, streak};
-}
-$("dailyBtn").onclick = () => {
-  const b = bonusState(); if (b.claimedToday) return;
-  const streak = b.streak + 1, r = DAY_REWARDS[(streak-1) % 7];
-  S.bonus = {last:today(), streak}; addBal(r); addXp(10);
-  haptic("ok"); sfx.cash(); toast(`🎁 День ${streak}: +${fmt(r)} 💎`); save(); renderAll();
-};
-
-const SEG = [{v:50,c:"#1f8fa3"},{v:300,c:"#2563eb"},{v:100,c:"#147a8e"},{v:1000,c:"#d97706"},{v:75,c:"#1f8fa3"},{v:500,c:"#7c3aed"},{v:150,c:"#147a8e"},{v:2500,c:"#dc2626"}];
-const WEIGHTS = [30,12,24,4,26,7,18,1];
-let wheelRot = 0;
-function buildWheel(){
-  const w = $("wheel"), n = SEG.length, step = 360/n;
-  w.style.background = `conic-gradient(${SEG.map((s,i)=>`${s.c} ${i*step}deg ${(i+1)*step}deg`).join(",")})`;
-  w.innerHTML = SEG.map((s,i)=>`<span style="transform:rotate(${i*step+step/2-90}deg) translate(62px,-8px)">${s.v}</span>`).join("");
-}
-const SPIN_CD = 4*3600*1000, REFILL_CD = 0;
-$("spinBtn").onclick = () => {
-  if (Date.now() < S.spinAt) return;
-  const total = WEIGHTS.reduce((a,b)=>a+b,0);
-  let r = Math.random()*total, idx = 0;
-  for (; idx < WEIGHTS.length; idx++) { r -= WEIGHTS[idx]; if (r < 0) break; }
-  const step = 360/SEG.length;
-  const target = 360 - (idx*step + step/2);
-  wheelRot += 360*5 + ((target - wheelRot % 360) + 360) % 360;
-  $("wheel").style.transform = `rotate(${wheelRot}deg)`;
-  S.spinAt = Date.now() + SPIN_CD; save(); $("spinBtn").disabled = true; haptic("medium");
-  let ticks = 0; const tick = setInterval(()=>{ sfx.click(); if (++ticks>25) clearInterval(tick); }, 140);
-  setTimeout(()=>{ const v = SEG[idx].v; addBal(v); save(); haptic("ok"); sfx.cash();
-    modal(`<div class="big">🎡</div><h3>+${fmt(v)} 💎</h3><p>Возвращайся через 4 часа</p><button class="bigbtn blue" onclick="closeModal()">Ура</button>`); renderAll(); }, 4100);
-};
-$("refillBtn").onclick = () => {
-  if (S.balance >= MIN_BET || (G && !G.over)) return;
-  addBal(500); haptic("ok"); sfx.cash(); toast("+500 💎"); save(); renderAll();
-};
-
-// ---------- UI ----------
-function toast(msg){ const t = document.createElement("div"); t.className="toast"; t.textContent = msg; $("toasts").appendChild(t); setTimeout(()=>{ t.style.transition="opacity .3s"; t.style.opacity=0; setTimeout(()=>t.remove(),300); }, 2400); }
-function modal(html){ $("modalBox").innerHTML = html; $("modal").classList.add("on"); }
-window.closeModal = () => $("modal").classList.remove("on");
-$("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
-
-document.querySelectorAll(".nav button").forEach(b => b.onclick = () => {
-  document.querySelectorAll(".nav button").forEach(x=>x.classList.toggle("on", x===b));
-  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on", v.id === "v-"+b.dataset.v));
-  sfx.click(); haptic("light"); renderAll(); window.scrollTo(0,0);
-});
-document.querySelectorAll(".tabs2 button").forEach(b => b.onclick = () => {
-  document.querySelectorAll(".tabs2 button").forEach(x=>x.classList.toggle("on", x===b));
-  $("mDaily").style.display = b.dataset.mt==="daily" ? "" : "none";
-  $("mAch").style.display = b.dataset.mt==="ach" ? "" : "none";
-});
-$("soundBtn").onclick = () => { S.sound = !S.sound; save(); renderTop(); };
-$("rulesBtn").onclick = () => modal(`<div class="big">💎</div><h3>Как играть</h3><div class="rules">
-  <p>1. Выбери ставку и количество ловушек (1–24).</p>
-  <p>2. Нажми «Играть» и открывай плитки — за каждым кристаллом растёт множитель.</p>
-  <p>3. Попал на ловушку — ставка сгорает. Забери выигрыш в любой момент!</p>
-  <p>4. Больше ловушек — выше множитель и риск.</p>
-  <p>5. Выполняй миссии, крути колесо и заходи каждый день за наградами.</p>
-  <p style="color:var(--muted)">Кристаллы — внутриигровая валюта без реальной стоимости.</p></div>
-  <button class="bigbtn blue" onclick="closeModal()">Понятно</button>`);
-$("resetBtn").onclick = () => {
-  const go = () => { S = DEFAULT(); G = null; save(); resetTiles(); board.classList.add("idle"); renderAll(); toast("Прогресс сброшен"); };
-  if (tg && tg.showConfirm && hasTg) tg.showConfirm("Сбросить весь прогресс?", ok => ok && go());
-  else if (confirm("Сбросить весь прогресс?")) go();
-};
-
-function renderTop(){
-  $("bal").textContent = fmt(S.balance);
-  $("lvl").textContent = S.level;
-  $("xpTxt").textContent = `${S.xp}/${xpNeed(S.level)}`;
-  $("xpBar").style.width = (S.xp/xpNeed(S.level)*100) + "%";
-  $("soundBtn").textContent = S.sound ? "🔊" : "🔇";
-}
-function renderGame(){
-  const active = G && !G.over;
-  $("traps").textContent = S.traps;
-  $("bet").value = S.bet;
-  const maxM = multFor(S.traps, SIZE - S.traps);
-  $("maxwin").textContent = fmt(S.bet * maxM) + " 💎";
-  $("setupRow").classList.toggle("disabled", !!active);
-  $("betBox").classList.toggle("disabled", !!active);
-  $("quick").classList.toggle("disabled", !!active);
-  const traps = active ? G.traps : S.traps, opened = active ? G.open.size : 0;
-  const cur = multFor(traps, opened);
-  $("mult").textContent = "×" + cur.toFixed(2);
-  $("next").textContent = opened < SIZE - traps ? `Следующий: ×${multFor(traps, opened+1).toFixed(2)}` : "";
-  const pb = $("playBtn");
-  if (active) {
-    pb.classList.add("cash");
-    pb.disabled = opened === 0;
-    pb.innerHTML = opened === 0 ? "Открой плитку" : `Забрать<small>${fmt(G.bet*cur)} 💎</small>`;
-  } else { pb.classList.remove("cash"); pb.disabled = false; pb.textContent = "Играть"; }
-}
-function renderMissions(){
-  checkDailyReset();
-  $("dailyList").innerHTML = DAILY.map(m => {
-    const p = S.daily.p[m.id]||0, done = p >= m.goal, got = S.daily.c[m.id];
-    return `<div class="card"><div class="ic">${m.ic}</div><div class="body"><div class="t">${m.t}</div>
-      <div class="d">${p}/${m.goal} · награда ${fmt(m.r)} 💎</div><div class="prog"><b style="width:${p/m.goal*100}%"></b></div></div>
-      <button class="claim ${got?"done":""}" data-dm="${m.id}" ${done&&!got?"":"disabled"}>${got?"✓":"Забрать"}</button></div>`;
-  }).join("");
-  $("achList").innerHTML = ACH.map(a => {
-    const v = Math.min(a.goal, a.v(S)), done = v >= a.goal, got = S.ach[a.id];
-    const shown = a.id.startsWith("x") ? `×${(+v).toFixed(2)}/×${a.goal}` : `${fmt(v)}/${fmt(a.goal)}`;
-    return `<div class="card"><div class="ic">${a.ic}</div><div class="body"><div class="t">${a.t}</div>
-      <div class="d">${a.d} · ${shown} · ${fmt(a.r)} 💎</div><div class="prog"><b style="width:${v/a.goal*100}%"></b></div></div>
-      <button class="claim ${got?"done":""}" data-am="${a.id}" ${done&&!got?"":"disabled"}>${got?"✓":"Забрать"}</button></div>`;
-  }).join("");
-}
-document.addEventListener("click", e => {
-  const d = e.target.closest("[data-dm]"); if (d) claimDaily(d.dataset.dm);
-  const a = e.target.closest("[data-am]"); if (a) claimAch(a.dataset.am);
-});
-function renderBonus(){
-  const b = bonusState();
-  const cur = b.claimedToday ? b.streak : b.streak + 1; // the day that is/was "today"
-  const base = Math.floor((cur-1)/7)*7;
-  $("days").innerHTML = DAY_REWARDS.map((r,i) => {
-    const dayN = base + i + 1;
-    const got = dayN < cur || (dayN === cur && b.claimedToday);
-    return `<div class="day ${got?"got":""} ${dayN===cur?"today":""}">День ${dayN}<b>${got?"✓":r}</b></div>`;
-  }).join("");
-  $("dailyBtn").disabled = b.claimedToday;
-  $("dailyBtn").textContent = b.claimedToday ? "Приходи завтра" : `Забрать ${fmt(DAY_REWARDS[(cur-1)%7])} 💎`;
-  const left = S.spinAt - Date.now();
-  $("spinBtn").disabled = left > 0;
-  $("spinBtn").textContent = left > 0 ? `Через ${dur(left)}` : "Крутить бесплатно";
-  const canRefill = S.balance < MIN_BET && !(G && !G.over);
-  $("refillBtn").disabled = !canRefill;
-  $("refillBtn").textContent = canRefill ? "Получить 500 💎" : "Доступно при балансе < 10";
-}
-function renderProfile(){
-  const s = S.stats, wr = s.games ? Math.round(s.wins/s.games*100) : 0;
-  const items = [["Раундов",fmt(s.games)],["Побед",`${fmt(s.wins)} (${wr}%)`],["Кристаллов открыто",fmt(s.gems)],["Лучший множитель","×"+s.bestMult.toFixed(2)],["Лучший выигрыш",fmt(s.bestWin)+" 💎"],["Уровень",S.level]];
-  $("stats").innerHTML = items.map(([k,v])=>`<div class="stat"><small>${k}</small><b>${v}</b></div>`).join("");
-  $("hist").innerHTML = S.hist.length ? S.hist.map(h=>`<div><span>${h.t} 💀 · ставка ${fmt(h.b)}</span><span class="${h.w?"win":"lose"}">${h.w?`×${h.m.toFixed(2)} +${fmt(h.win)}`:`−${fmt(h.b)}`}</span></div>`).join("") : `<div style="color:var(--muted)">Пока нет игр</div>`;
-}
-function renderDots(){
-  checkDailyReset();
-  const m = DAILY.some(x => (S.daily.p[x.id]||0) >= x.goal && !S.daily.c[x.id]) || ACH.some(a => a.v(S) >= a.goal && !S.ach[a.id]);
-  const b = !bonusState().claimedToday || Date.now() >= S.spinAt;
-  $("dotM").classList.toggle("show", m); $("dotB").classList.toggle("show", b);
-}
-const dur = ms => { const s = Math.ceil(ms/1000), h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return h ? `${h}ч ${m}м` : `${m}м ${x}с`; };
-function renderTimer(){
-  const n = new Date(), t = new Date(n); t.setHours(24,0,0,0);
-  $("resetIn").textContent = dur(t - n);
-}
-function renderAll(){ renderTop(); renderGame(); renderMissions(); renderBonus(); renderProfile(); renderDots(); renderTimer(); }
-
-// ---------- init ----------
-(function stars(){ const f = $("bgfx"); for (let i=0;i<18;i++){ const s = document.createElement("i"); s.style.left = Math.random()*100+"%"; s.style.top = Math.random()*100+"%"; s.style.animationDelay = (Math.random()*4)+"s"; f.appendChild(s);} })();
-const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
-if (u) { $("uname").textContent = [u.first_name, u.last_name].filter(Boolean).join(" "); $("ava").textContent = (u.first_name||"?")[0].toUpperCase(); }
-else { $("ava").textContent = "И"; }
-buildBoard(); buildWheel();
-load(saved => {
-  if (saved) S = merge(saved);
-  checkDailyReset();
-  renderAll();
-});
-setInterval(() => { renderTimer(); if ($("v-bonus").classList.contains("on")) renderBonus(); renderDots(); }, 1000);
-})();
-</script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

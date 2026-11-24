@@ -1,0 +1,17 @@
+name = "crystal-mines"
+main = "src/worker.js"
+compatibility_date = "2025-10-01"
+account_id = "03b20ce0f3cc2a4a87b859d769f738cf"
+workers_dev = true
+
+[vars]
+WEBAPP_URL = "https://uwqm.github.io/crystal-mines/"
+ADMINS = "8605226951,1588937163"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "crystal-mines"
+database_id = "f48c1b81-1ecc-47c1-9e37-253cec7b3545"
+
+[observability]
+enabled = true
