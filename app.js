@@ -22,7 +22,8 @@ document.addEventListener("gesturestart", e => e.preventDefault());
 document.addEventListener("dblclick", e => e.preventDefault(), {passive:false});
 
 const $ = id => document.getElementById(id);
-const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 1000000;
+const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 1000000, MAX_WIN = 100000000;
+const payout = (bet, m) => Math.min(MAX_WIN, Math.floor(bet * m));
 
 const GEM = `<svg viewBox="0 0 64 64"><defs><linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b8f7ff"/><stop offset="1" stop-color="#1fb6d6"/></linearGradient></defs><polygon points="12,24 22,10 42,10 52,24 32,56" fill="url(#gg)"/><polygon points="12,24 52,24 32,56" fill="#22a9cc"/><polygon points="22,10 32,24 42,10" fill="#dffbff"/><polygon points="12,24 22,10 32,24" fill="#8eeeff"/><polygon points="32,24 42,10 52,24" fill="#5fd8f0"/><polygon points="22,24 32,56 12,24" fill="#3ec4e4" opacity=".7"/></svg>`;
 const MINE = `<svg viewBox="0 0 64 64"><g stroke="#2a0f1e" stroke-width="5" stroke-linecap="round"><line x1="32" y1="6" x2="32" y2="58"/><line x1="6" y1="32" x2="58" y2="32"/><line x1="14" y1="14" x2="50" y2="50"/><line x1="50" y1="14" x2="14" y2="50"/></g><circle cx="32" cy="32" r="17" fill="#ff4d6d"/><circle cx="32" cy="32" r="17" fill="none" stroke="#2a0f1e" stroke-width="3"/><circle cx="26" cy="26" r="5" fill="#ffd0da"/></svg>`;
@@ -93,7 +94,12 @@ async function api(route, body, method = "POST") {
   });
   let data = {}; try { data = await r.json(); } catch(e){}
   if (!r.ok) throw new Error(data.error || ("Ошибка " + r.status));
-  if (data.state) { S = data.state; clockSkew = S.serverNow - Date.now(); }
+  if (data.state) {
+    // ставка/ловушки/звук — это выбор игрока на экране; ответ сервера не должен его перетирать
+    const keep = S && route !== "start" ? { traps: S.traps, bet: S.bet, sound: S.sound } : null;
+    S = data.state; clockSkew = S.serverNow - Date.now();
+    if (keep && !S.game) Object.assign(S, keep);
+  }
   if (data.events) data.events.forEach(onEvent);
   return data;
 }
@@ -141,11 +147,25 @@ async function startGame(){
   lastRound = null; resetTiles(); board.classList.remove("idle");
   haptic("medium"); sfx.click(); renderAll();
 }
-async function onTile(i, el){
-  if (!S || !S.game || busy || S.game.open.includes(i)) return;
-  el.style.transform = "scale(.9)";
+const tapQueue = [];
+function onTile(i, el){
+  if (!S || !S.game || S.game.open.includes(i) || tapQueue.includes(i)) return;
+  el.classList.add("pending"); haptic("light");
+  tapQueue.push(i);
+  if (tapQueue.length === 1) runQueue();
+}
+async function runQueue(){
+  while (tapQueue.length) {
+    const i = tapQueue[0], el = board.children[i];
+    if (!S.game) { tapQueue.forEach(j => board.children[j].classList.remove("pending")); tapQueue.length = 0; break; }
+    await revealTile(i, el);
+    el.classList.remove("pending");
+    tapQueue.shift();
+  }
+}
+async function revealTile(i, el){
+  while (busy) await new Promise(r => setTimeout(r, 30));
   const r = await act("reveal", { i });
-  el.style.transform = "";
   if (!r) return;
   if (r.result === "boom") {
     el.className = "tile open boom"; el.innerHTML = MINE;
@@ -302,7 +322,7 @@ function renderGame(){
   const g = S.game, active = !!g;
   $("traps").textContent = S.traps;
   if (document.activeElement !== $("bet")) $("bet").value = S.bet;
-  $("maxwin").textContent = fmt(S.bet * multFor(S.traps, SIZE - S.traps)) + " 💎";
+  $("maxwin").textContent = fmt(payout(S.bet, multFor(S.traps, SIZE - S.traps))) + " 💎";
   ["setupRow","betBox","quick"].forEach(id => $(id).classList.toggle("disabled", active));
   const traps = active ? g.traps : S.traps, opened = active ? g.open.length : 0;
   const cur = multFor(traps, opened);
@@ -312,7 +332,7 @@ function renderGame(){
   const pb = $("playBtn");
   if (active) {
     pb.classList.add("cash"); pb.disabled = opened === 0;
-    pb.innerHTML = opened === 0 ? "Открой плитку" : `Забрать<small>${fmt(g.bet*cur)} 💎</small>`;
+    pb.innerHTML = opened === 0 ? "Открой плитку" : `Забрать<small>${fmt(payout(g.bet, cur))} 💎</small>`;
   } else { pb.classList.remove("cash"); pb.disabled = false; pb.textContent = "Играть"; }
 }
 function renderMissions(){

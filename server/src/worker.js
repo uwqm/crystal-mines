@@ -1,7 +1,7 @@
 // Crystal Mines — Cloudflare Worker: игровой сервер, таблица лидеров, админка и Telegram-бот (webhook).
 // Секреты: BOT_TOKEN, WEBHOOK_SECRET. Переменные: WEBAPP_URL, ADMINS ("id1,id2"). База: D1 (binding DB).
 
-const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 1_000_000;
+const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 1_000_000, MAX_WIN = 100_000_000;
 const DAY_REWARDS = [100, 150, 200, 300, 400, 600, 1000];
 const SPIN_CD = 4 * 3600 * 1000;
 const SEG = [50, 300, 100, 1000, 75, 500, 150, 2500];
@@ -71,7 +71,9 @@ async function verifyInitData(initData, botToken) {
 }
 
 // ---------- DB ----------
+let schemaReady = false;
 async function ensureSchema(env) {
+  if (schemaReady) return;
   await env.DB.batch([
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY, username TEXT, name TEXT, state TEXT NOT NULL,
@@ -82,6 +84,7 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS users_un ON users(username)`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending (chat_id INTEGER PRIMARY KEY, cmd TEXT, target TEXT, ts INTEGER)`),
   ]);
+  schemaReady = true;
 }
 function mergeState(o) {
   const d = DEFAULT();
@@ -190,7 +193,7 @@ const ACTIONS = {
   },
   cashout(s, b, ev) {
     const g = s.game; if (!g || !g.open.length) throw new Error("Нечего забирать");
-    const m = multFor(g.traps, g.open.length), win = Math.floor(g.bet * m);
+    const m = multFor(g.traps, g.open.length), win = Math.min(MAX_WIN, Math.floor(g.bet * m));
     s.balance += win;
     const traps = g.traps;
     const rv = finishRound(s, true, win, m, ev);
