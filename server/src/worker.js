@@ -2,6 +2,7 @@
 // Секреты: BOT_TOKEN, WEBHOOK_SECRET. Переменные: WEBAPP_URL, ADMINS ("id1,id2"). База: D1 (binding DB).
 
 const SIZE = 25, EDGE = 0.97, MIN_BET = 10, MAX_BET = 1_000_000, MAX_WIN = 100_000_000;
+const MAX_BALANCE = 1e15, ADMIN_MAX_AMOUNT = 1e12, DAILY_ROUND_XP = 600, REFILL_CD = 30 * 60 * 1000;
 const DAY_REWARDS = [100, 150, 200, 300, 400, 600, 1000];
 const SPIN_CD = 4 * 3600 * 1000;
 const SEG = [50, 300, 100, 1000, 75, 500, 150, 2500];
@@ -36,14 +37,16 @@ const DEFAULT = () => ({
   balance: 1000, xp: 0, level: 1, sound: true, traps: 3, bet: 10,
   stats: { games: 0, wins: 0, losses: 0, gems: 0, bestMult: 0, bestWin: 0, totalWon: 0, totalBet: 0 },
   daily: { date: "", p: {}, c: {} }, ach: {}, bonus: { last: "", streak: 0 },
-  spinAt: 0, hist: [], game: null,
+  spinAt: 0, refillAt: 0, hist: [], game: null,
 });
 
 function cors(env, req) {
   const origin = req.headers.get("Origin") || "";
-  const allowed = origin.endsWith(".github.io") || origin.startsWith("http://localhost") || origin === "null";
+  const site = new URL(env.WEBAPP_URL).origin;
+  const allowed = origin === site || /^http:\/\/localhost(:\d+)?$/.test(origin);
   return {
-    "Access-Control-Allow-Origin": allowed ? origin || "*" : (env.WEBAPP_ORIGIN || "*"),
+    "Access-Control-Allow-Origin": allowed ? origin : site,
+    "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,X-Init-Data",
     "Access-Control-Max-Age": "86400",
@@ -64,9 +67,12 @@ async function verifyInitData(initData, botToken) {
   p.delete("hash");
   const check = [...p.entries()].sort(([a], [b]) => a < b ? -1 : 1).map(([k, v]) => `${k}=${v}`).join("\n");
   const secret = await hmac(new TextEncoder().encode("WebAppData"), botToken);
-  if (hex(await hmac(secret, check)) !== hash) return null;
-  const authDate = +p.get("auth_date") || 0;
-  if (Date.now() / 1000 - authDate > 7 * 86400) return null; // старше недели — не принимаем
+  const calc = hex(await hmac(secret, check));
+  if (calc.length !== hash.length) return null;
+  let diff = 0; for (let i = 0; i < calc.length; i++) diff |= calc.charCodeAt(i) ^ hash.charCodeAt(i);
+  if (diff) return null;
+  const authDate = +p.get("auth_date") || 0, age = Date.now() / 1000 - authDate;
+  if (age > 24 * 3600 || age < -300) return null; // ссылка на вход действует сутки
   try { return JSON.parse(p.get("user")); } catch { return null; }
 }
 
@@ -84,7 +90,23 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS users_un ON users(username)`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending (chat_id INTEGER PRIMARY KEY, cmd TEXT, target TEXT, ts INTEGER)`),
   ]);
+  // версия строки: защищает от одновременных запросов, которые перезаписывают друг друга
+  try { await env.DB.prepare("ALTER TABLE users ADD COLUMN ver INTEGER NOT NULL DEFAULT 0").run(); } catch (e) { /* колонка уже есть */ }
   schemaReady = true;
+}
+
+// Ошибка, которую можно показать игроку. Остальные ошибки наружу не отдаём.
+class UserError extends Error {}
+const fail = msg => { throw new UserError(msg); };
+
+// простое ограничение частоты запросов (на один экземпляр сервера)
+const rl = new Map();
+function rateLimited(id, limit = 25, windowMs = 5000) {
+  const now = Date.now();
+  const arr = (rl.get(id) || []).filter(t => now - t < windowMs);
+  arr.push(now); rl.set(id, arr);
+  if (rl.size > 5000) for (const [k, v] of rl) if (!v.length || now - v[v.length - 1] > windowMs) rl.delete(k);
+  return arr.length > limit;
 }
 function mergeState(o) {
   const d = DEFAULT();
@@ -102,7 +124,7 @@ async function loadOrCreate(env, tgUser) {
   let u = await getUser(env, id);
   if (!u) {
     const s = DEFAULT();
-    await env.DB.prepare("INSERT INTO users (id, username, name, state, balance, level, xp, hidden, updated) VALUES (?,?,?,?,?,?,?,0,?)")
+    await env.DB.prepare("INSERT OR IGNORE INTO users (id, username, name, state, balance, level, xp, hidden, updated) VALUES (?,?,?,?,?,?,?,0,?)")
       .bind(id, username, name, JSON.stringify(s), s.balance, s.level, s.xp, Date.now()).run();
     u = await getUser(env, id);
   } else if (u.row.name !== name || u.row.username !== username) {
@@ -111,9 +133,12 @@ async function loadOrCreate(env, tgUser) {
   }
   return u;
 }
-async function saveUser(env, id, s) {
-  await env.DB.prepare("UPDATE users SET state=?, balance=?, level=?, xp=?, updated=? WHERE id=?")
-    .bind(JSON.stringify(s), Math.floor(s.balance), s.level, s.xp, Date.now(), id).run();
+// Сохраняет, только если с момента чтения строку никто не менял. Возвращает false при конфликте.
+async function saveUser(env, id, s, ver) {
+  s.balance = Math.max(0, Math.min(MAX_BALANCE, Math.floor(s.balance)));
+  const r = await env.DB.prepare("UPDATE users SET state=?, balance=?, level=?, xp=?, updated=?, ver=ver+1 WHERE id=? AND ver=?")
+    .bind(JSON.stringify(s), s.balance, s.level, s.xp, Date.now(), id, ver).run();
+  return r.meta.changes === 1;
 }
 async function findTarget(env, target) {
   target = String(target || "").trim().replace(/^@/, "");
@@ -155,7 +180,10 @@ function finishRound(s, won, win, m, ev) {
     if (m >= 2) addProg(s, "cash2", 1, ev);
     if (g.traps >= 7) addProg(s, "hard", 1, ev);
   } else s.stats.losses++;
-  addXp(s, 5 + opened * 2 + (won ? g.traps : 0), ev);
+  // опыт только за раунды с реальным риском (не «1 ловушка, 1 клетка, выигрыш = ставке»), с дневным лимитом
+  const risky = !won || win > g.bet;
+  const gain = risky ? Math.min(5 + opened * 2 + (won ? g.traps : 0), Math.max(0, DAILY_ROUND_XP - (s.daily.xp || 0))) : 0;
+  if (gain) { s.daily.xp = (s.daily.xp || 0) + gain; addXp(s, gain, ev); }
   s.hist.unshift({ w: won, b: g.bet, m, win, t: g.traps });
   s.hist = s.hist.slice(0, 15);
   const reveal = { mines: g.mines, open: g.open };
@@ -167,24 +195,24 @@ const ACTIONS = {
   state() { return {}; },
   settings(s, b) {
     if (typeof b.sound === "boolean") s.sound = b.sound;
-    if (Number.isFinite(b.traps)) s.traps = Math.max(1, Math.min(24, Math.floor(b.traps)));
-    if (Number.isFinite(b.bet)) s.bet = Math.max(MIN_BET, Math.min(MAX_BET, Math.floor(b.bet)));
+    if (typeof b.traps === "number" && Number.isFinite(b.traps)) s.traps = Math.max(1, Math.min(24, Math.floor(b.traps)));
+    if (typeof b.bet === "number" && Number.isFinite(b.bet)) s.bet = Math.max(MIN_BET, Math.min(MAX_BET, Math.floor(b.bet)));
     return {};
   },
   start(s, b) {
-    if (s.game) throw new Error("Раунд уже идёт");
+    if (s.game) fail("Раунд уже идёт");
     const traps = Math.max(1, Math.min(24, Math.floor(+b.traps || s.traps)));
     const bet = Math.max(MIN_BET, Math.min(MAX_BET, Math.floor(+b.bet || s.bet)));
-    if (bet > s.balance) throw new Error("Недостаточно кристаллов");
+    if (bet > s.balance) fail("Недостаточно кристаллов");
     const mines = new Set(); while (mines.size < traps) mines.add(rnd(SIZE));
     s.balance -= bet; s.stats.totalBet += bet; s.traps = traps; s.bet = bet;
     s.game = { mines: [...mines], open: [], bet, traps };
     return {};
   },
   reveal(s, b, ev) {
-    const g = s.game; if (!g) throw new Error("Нет активного раунда");
+    const g = s.game; if (!g) fail("Нет активного раунда");
     const i = Math.floor(+b.i);
-    if (!(i >= 0 && i < SIZE) || g.open.includes(i)) throw new Error("Неверная клетка");
+    if (!(i >= 0 && i < SIZE) || g.open.includes(i)) fail("Неверная клетка");
     if (g.mines.includes(i)) { const rv = finishRound(s, false, 0, 0, ev); return { result: "boom", hit: i, reveal: rv }; }
     g.open.push(i); s.stats.gems++; addProg(s, "gems", 1, ev);
     if (g.open.length === 5) addProg(s, "row5", 1, ev);
@@ -192,7 +220,7 @@ const ACTIONS = {
     return { result: "gem", i };
   },
   cashout(s, b, ev) {
-    const g = s.game; if (!g || !g.open.length) throw new Error("Нечего забирать");
+    const g = s.game; if (!g || !g.open.length) fail("Нечего забирать");
     const m = multFor(g.traps, g.open.length), win = Math.min(MAX_WIN, Math.floor(g.bet * m));
     s.balance += win;
     const traps = g.traps;
@@ -201,25 +229,25 @@ const ACTIONS = {
   },
   claimDaily(s, b, ev) {
     checkDaily(s);
-    const m = DAILY.find(x => x.id === b.id); if (!m) throw new Error("Нет такой миссии");
-    if ((s.daily.p[m.id] || 0) < m.goal || s.daily.c[m.id]) throw new Error("Пока нельзя забрать");
+    const m = DAILY.find(x => x.id === String(b.id)); if (!m) fail("Нет такой миссии");
+    if ((s.daily.p[m.id] || 0) < m.goal || s.daily.c[m.id]) fail("Пока нельзя забрать");
     s.daily.c[m.id] = true; s.balance += m.r; addXp(s, 20, ev);
     return { reward: m.r };
   },
   claimAch(s, b) {
-    const a = ACH.find(x => x.id === b.id); if (!a) throw new Error("Нет такого достижения");
-    if (a.v(s) < a.goal || s.ach[a.id]) throw new Error("Пока нельзя забрать");
+    const a = ACH.find(x => x.id === String(b.id)); if (!a) fail("Нет такого достижения");
+    if (a.v(s) < a.goal || s.ach[a.id]) fail("Пока нельзя забрать");
     s.ach[a.id] = true; s.balance += a.r;
     return { reward: a.r };
   },
   bonus(s, b, ev) {
-    const st = bonusState(s); if (st.claimedToday) throw new Error("Уже забрано сегодня");
+    const st = bonusState(s); if (st.claimedToday) fail("Уже забрано сегодня");
     const streak = st.streak + 1, r = DAY_REWARDS[(streak - 1) % 7];
     s.bonus = { last: dayKey(), streak }; s.balance += r; addXp(s, 10, ev);
     return { reward: r, streak };
   },
   spin(s) {
-    if (Date.now() < s.spinAt) throw new Error("Колесо ещё не готово");
+    if (Date.now() < s.spinAt) fail("Колесо ещё не готово");
     const total = WEIGHTS.reduce((a, c) => a + c, 0);
     let r = Math.random() * total, idx = 0;
     for (; idx < WEIGHTS.length; idx++) { r -= WEIGHTS[idx]; if (r < 0) break; }
@@ -228,14 +256,15 @@ const ACTIONS = {
     return { idx, reward: SEG[idx] };
   },
   refill(s) {
-    if (s.balance >= MIN_BET || s.game) throw new Error("Доступно при балансе меньше 10");
-    s.balance += 500; return { reward: 500 };
+    if (s.balance >= MIN_BET || s.game) fail("Доступно при балансе меньше 10");
+    if (Date.now() < (s.refillAt || 0)) fail(`Пополнение снова через ${Math.ceil((s.refillAt - Date.now()) / 60000)} мин`);
+    s.balance += 500; s.refillAt = Date.now() + REFILL_CD; return { reward: 500 };
   },
 };
 
 // what the client is allowed to see
 function publicState(s, row, env) {
-  const out = { ...s };
+  const out = { ...s }; delete out._w;
   if (s.game) out.game = { open: s.game.open, bet: s.game.bet, traps: s.game.traps };
   out.bonusState = bonusState(s);
   out.dayKey = dayKey();
@@ -264,31 +293,36 @@ async function leaderboard(env, by, meId) {
 
 // ---------- admin ----------
 async function adminApply(env, adminId, act) {
-  if (!isAdmin(env, adminId)) throw new Error("Нет прав администратора");
-  const row = await findTarget(env, act.target);
-  if (!row) throw new Error("Игрок не найден. Он должен хотя бы раз открыть игру.");
-  const s = mergeState(JSON.parse(row.state));
-  const msg = [];
-  if (act.crystals) {
-    const n = Math.trunc(+act.crystals); if (!Number.isFinite(n)) throw new Error("Неверное число");
-    s.balance = Math.max(0, s.balance + n); msg.push(`${n >= 0 ? "+" : ""}${n} 💎`);
+  if (!isAdmin(env, adminId)) fail("Нет прав администратора");
+  const num = (v, max) => {
+    const n = Math.trunc(Number(String(v).replace(/[s_]/g, "")));
+    if (!Number.isFinite(n) || n === 0) fail("Неверное число");
+    if (Math.abs(n) > max) fail(`Слишком большое число (максимум ${max.toLocaleString("ru-RU")})`);
+    return n;
+  };
+  const dc = act.crystals != null && act.crystals !== "" ? num(act.crystals, ADMIN_MAX_AMOUNT) : 0;
+  const dl = act.levels != null && act.levels !== "" ? num(act.levels, 1000) : 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const row = await findTarget(env, act.target);
+    if (!row) fail("Игрок не найден. Он должен хотя бы раз открыть игру.");
+    const s = mergeState(JSON.parse(row.state));
+    const msg = [];
+    if (dc) { s.balance = Math.max(0, s.balance + dc); msg.push(`${dc > 0 ? "+" : ""}${dc} 💎`); }
+    if (dl) { s.level = Math.max(1, Math.min(1000, s.level + dl)); s.xp = 0; msg.push(`${dl > 0 ? "+" : ""}${dl} ур. (теперь ${s.level})`); }
+    if ((dc || dl) && !(await saveUser(env, row.id, s, row.ver))) continue; // игрок как раз играл — повторяем
+    if (typeof act.hidden === "boolean") {
+      await env.DB.prepare("UPDATE users SET hidden=? WHERE id=?").bind(act.hidden ? 1 : 0, row.id).run();
+      msg.push(act.hidden ? "скрыт из таблиц лидеров" : "снова в таблицах лидеров");
+    }
+    const who = row.username ? `@${row.username}` : `${row.name} (${row.id})`;
+    return { ok: true, text: `${who}: ${msg.join(", ") || "без изменений"}`, user: { id: row.id, name: row.name, username: row.username, balance: s.balance, level: s.level, hidden: typeof act.hidden === "boolean" ? act.hidden : !!row.hidden } };
   }
-  if (act.levels) {
-    const n = Math.trunc(+act.levels); if (!Number.isFinite(n)) throw new Error("Неверное число");
-    s.level = Math.max(1, Math.min(1000, s.level + n)); s.xp = 0; msg.push(`${n >= 0 ? "+" : ""}${n} ур. (теперь ${s.level})`);
-  }
-  if (act.crystals || act.levels) await saveUser(env, row.id, s);
-  if (typeof act.hidden === "boolean") {
-    await env.DB.prepare("UPDATE users SET hidden=? WHERE id=?").bind(act.hidden ? 1 : 0, row.id).run();
-    msg.push(act.hidden ? "скрыт из таблиц лидеров" : "снова в таблицах лидеров");
-  }
-  const who = row.username ? `@${row.username}` : `${row.name} (${row.id})`;
-  return { ok: true, text: `${who}: ${msg.join(", ") || "без изменений"}`, user: { id: row.id, name: row.name, username: row.username, balance: s.balance, level: s.level, hidden: typeof act.hidden === "boolean" ? act.hidden : !!row.hidden } };
+  fail("Не удалось сохранить, попробуй ещё раз");
 }
 async function adminFind(env, adminId, target) {
-  if (!isAdmin(env, adminId)) throw new Error("Нет прав администратора");
+  if (!isAdmin(env, adminId)) fail("Нет прав администратора");
   const row = await findTarget(env, target);
-  if (!row) throw new Error("Игрок не найден");
+  if (!row) fail("Игрок не найден");
   return { user: { id: row.id, name: row.name, username: row.username, balance: row.balance, level: row.level, hidden: !!row.hidden, admin: isAdmin(env, row.id) } };
 }
 
@@ -363,14 +397,13 @@ async function onUpdate(env, upd) {
         return send(`👤 <b>${esc(u.name)}</b>${u.username ? ` @${esc(u.username)}` : ""}\nID: <code>${u.id}</code>\n💎 ${u.balance.toLocaleString("ru-RU")} · ур. ${u.level}${u.hidden ? "\n🙈 скрыт из таблиц" : ""}${u.admin ? "\n🛡 admin" : ""}`);
       }
       const act = { target };
-      if (cmd === "/give") act.crystals = +amount;
-      if (cmd === "/level") act.levels = +amount;
+      if (cmd === "/give") act.crystals = amount;
+      if (cmd === "/level") act.levels = amount;
       if (cmd === "/hide") act.hidden = true;
       if (cmd === "/unhide") act.hidden = false;
-      if ((cmd === "/give" || cmd === "/level") && !Number.isFinite(+amount)) return send(`Формат: ${cmd} @ник число`);
       const r = await adminApply(env, from.id, act);
       return send("✅ " + esc(r.text));
-    } catch (e) { return send("⚠️ " + esc(e.message)); }
+    } catch (e) { if (!(e instanceof UserError)) console.log("admin cmd error", e && e.stack); return send("⚠️ " + esc(e instanceof UserError ? e.message : "Ошибка сервера, попробуй ещё раз")); }
   }
 }
 
@@ -407,9 +440,12 @@ export default {
 
       if (url.pathname.startsWith("/api/")) {
         const tgUser = await verifyInitData(req.headers.get("X-Init-Data"), env.BOT_TOKEN);
-        if (!tgUser) return json({ error: "Открой игру через Telegram-бота" }, 401, h);
+        if (!tgUser || !Number.isSafeInteger(tgUser.id)) return json({ error: "Сессия устарела — закрой и снова открой игру через бота" }, 401, h);
+        const limited = env.RL ? !(await env.RL.limit({ key: String(tgUser.id) })).success : rateLimited(tgUser.id);
+        if (limited) return json({ error: "Слишком быстро, подожди секунду" }, 429, h);
         await ensureSchema(env);
-        const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+        let body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+        if (!body || typeof body !== "object" || Array.isArray(body)) body = {};
         const route = url.pathname.slice(5);
 
         if (route === "leaderboard") return json(await leaderboard(env, url.searchParams.get("by") || body.by, tgUser.id), 200, h);
@@ -419,20 +455,34 @@ export default {
           return json(r, 200, h);
         }
 
+        if (!Object.prototype.hasOwnProperty.call(ACTIONS, route)) return json({ error: "not found" }, 404, h);
         const action = ACTIONS[route];
-        if (!action) return json({ error: "not found" }, 404, h);
-        const u = await loadOrCreate(env, tgUser);
-        const s = u.s, ev = [];
-        checkDaily(s);
-        const res = action(s, body, ev);
-        if (route !== "state") await saveUser(env, u.row.id, s);
-        return json({ ...res, events: ev, state: publicState(s, u.row, env) }, 200, h);
+        // каждое действие применяется к свежему состоянию; если между чтением и записью
+        // пришёл другой запрос, перечитываем и повторяем (защита от «отката» проигрыша)
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const u = await loadOrCreate(env, tgUser);
+          const s = u.s, ev = [];
+          if (route !== "state") {
+            // строгий лимит записей: не больше 90 действий в минуту на игрока (отказ ничего не пишет в базу)
+            const nowT = Date.now(), w = s._w && nowT - s._w.t < 60000 ? s._w : { t: nowT, n: 0 };
+            if (w.n >= 90) return json({ error: "Слишком быстро, подожди немного" }, 429, h);
+            w.n++; s._w = w;
+          }
+          checkDaily(s);
+          const res = action(s, body, ev);
+          if (route === "state" || await saveUser(env, u.row.id, s, u.row.ver)) {
+            return json({ ...res, events: ev, state: publicState(s, u.row, env) }, 200, h);
+          }
+        }
+        return json({ error: "Слишком много запросов одновременно, попробуй ещё раз" }, 409, h);
       }
 
       if (url.pathname === "/") return new Response("Crystal Mines server OK");
       return new Response("not found", { status: 404 });
     } catch (e) {
-      return json({ error: e.message || "Ошибка сервера" }, 400, h);
+      if (e instanceof UserError) return json({ error: e.message }, 400, h);
+      console.log("server error", e && e.stack);
+      return json({ error: "Ошибка сервера, попробуй ещё раз" }, 500, h);
     }
   },
 };

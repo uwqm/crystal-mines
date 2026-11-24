@@ -93,6 +93,7 @@ async function api(route, body, method = "POST") {
     body: method === "POST" ? JSON.stringify(body || {}) : undefined,
   });
   let data = {}; try { data = await r.json(); } catch(e){}
+  if (r.status === 401) { $("gateMsg").textContent = data.error || "Сессия устарела — открой игру заново через бота."; $("gateBtn").style.display = ""; $("gate").classList.remove("off"); }
   if (!r.ok) throw new Error(data.error || ("Ошибка " + r.status));
   if (data.state) {
     // ставка/ловушки/звук — это выбор игрока на экране; ответ сервера не должен его перетирать
@@ -151,7 +152,7 @@ const tapQueue = [];
 function onTile(i, el){
   if (!S || !S.game || S.game.open.includes(i) || tapQueue.includes(i)) return;
   el.classList.add("pending"); haptic("light");
-  tapQueue.push(i);
+  tapQueue.push(i); renderGame();
   if (tapQueue.length === 1) runQueue();
 }
 async function runQueue(){
@@ -180,6 +181,9 @@ async function revealTile(i, el){
   renderAll();
 }
 async function cashOut(){
+  // сначала дождаться уже нажатых плиток, иначе «Забрать» потеряется
+  while (tapQueue.length || busy) await new Promise(r => setTimeout(r, 30));
+  if (!S.game || !S.game.open.length) return;
   const r = await act("cashout");
   if (r) { onCashed(r); renderAll(); }
 }
@@ -331,8 +335,9 @@ function renderGame(){
   board.classList.toggle("idle", !active);
   const pb = $("playBtn");
   if (active) {
-    pb.classList.add("cash"); pb.disabled = opened === 0;
-    pb.innerHTML = opened === 0 ? "Открой плитку" : `Забрать<small>${fmt(payout(g.bet, cur))} 💎</small>`;
+    const waiting = opened === 0 && tapQueue.length > 0;
+    pb.classList.add("cash"); pb.disabled = opened === 0 && !waiting;
+    pb.innerHTML = waiting ? "Забрать" : opened === 0 ? "Открой плитку" : `Забрать<small>${fmt(payout(g.bet, cur))} 💎</small>`;
   } else { pb.classList.remove("cash"); pb.disabled = false; pb.textContent = "Играть"; }
 }
 function renderMissions(){
@@ -372,9 +377,10 @@ function renderBonus(){
     $("spinBtn").disabled = left > 0;
     $("spinBtn").textContent = left > 0 ? `Через ${dur(left)}` : "Крутить бесплатно";
   }
-  const canRefill = S.balance < MIN_BET && !S.game;
+  const refLeft = (S.refillAt || 0) - now();
+  const canRefill = S.balance < MIN_BET && !S.game && refLeft <= 0;
   $("refillBtn").disabled = !canRefill;
-  $("refillBtn").textContent = canRefill ? "Получить 500 💎" : "Доступно при балансе < 10";
+  $("refillBtn").textContent = canRefill ? "Получить 500 💎" : (S.balance < MIN_BET && refLeft > 0 ? `Снова через ${dur(refLeft)}` : "Доступно при балансе < 10");
 }
 function renderProfile(){
   const s = S.stats, wr = s.games ? Math.round(s.wins/s.games*100) : 0;
